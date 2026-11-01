@@ -1,0 +1,4 @@
+module ttzip_app_coreFFI {
+    header "ttzip_app_coreFFI.h"
+    export *
+}

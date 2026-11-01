@@ -1,0 +1,4 @@
+* text=auto eol=lf
+
+*.rs text eol=lf diff=rust
+*.swift text eol=lf diff=swift
