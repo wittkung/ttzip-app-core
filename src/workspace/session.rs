@@ -12,6 +12,17 @@ use crate::workspace::types::{
     current_epoch_ms, normalize_uri, HistoryEntry, WorkspaceLayout, WorkspaceSession, WorkspaceTab,
 };
 
+/// Maximum number of navigation history entries retained per workspace tab.
+pub const MAX_TAB_HISTORY_ENTRIES: usize = 256;
+
+fn push_bounded<T>(stack: &mut Vec<T>, item: T, max_len: usize) {
+    if stack.len() >= max_len {
+        let overflow = stack.len() + 1 - max_len;
+        stack.drain(0..overflow);
+    }
+    stack.push(item);
+}
+
 /// Thread-safe manager handling multiple workspace windows and tabs.
 pub struct SessionManager {
     sessions: RwLock<HashMap<Uuid, WorkspaceSession>>,
@@ -144,14 +155,14 @@ impl SessionManager {
         if tab.current_uri != norm_uri {
             let now_ms = current_epoch_ms();
             let old_uri = std::mem::replace(&mut tab.current_uri, norm_uri.clone());
-            tab.history_back.push(old_uri);
+            push_bounded(&mut tab.history_back, old_uri, MAX_TAB_HISTORY_ENTRIES);
             tab.history_forward.clear();
             tab.last_accessed_epoch_ms = now_ms;
-            tab.history_entries.push(HistoryEntry::with_timestamp(
-                norm_uri,
-                Some(tab.title.clone()),
-                now_ms,
-            ));
+            push_bounded(
+                &mut tab.history_entries,
+                HistoryEntry::with_timestamp(norm_uri, Some(tab.title.clone()), now_ms),
+                MAX_TAB_HISTORY_ENTRIES,
+            );
             session.updated_at_epoch_ms = now_ms;
         }
 
@@ -177,7 +188,7 @@ impl SessionManager {
 
         let now_ms = current_epoch_ms();
         let old_uri = std::mem::replace(&mut tab.current_uri, prev.clone());
-        tab.history_forward.push(old_uri);
+        push_bounded(&mut tab.history_forward, old_uri, MAX_TAB_HISTORY_ENTRIES);
         tab.last_accessed_epoch_ms = now_ms;
         session.updated_at_epoch_ms = now_ms;
         Ok(prev)
@@ -202,7 +213,7 @@ impl SessionManager {
 
         let now_ms = current_epoch_ms();
         let old_uri = std::mem::replace(&mut tab.current_uri, next.clone());
-        tab.history_back.push(old_uri);
+        push_bounded(&mut tab.history_back, old_uri, MAX_TAB_HISTORY_ENTRIES);
         tab.last_accessed_epoch_ms = now_ms;
         session.updated_at_epoch_ms = now_ms;
         Ok(next)
@@ -282,5 +293,26 @@ mod tests {
         assert!(mgr.navigate_tab(fake_uuid, tab2_id, "file:///dest").is_err());
         assert!(mgr.navigate_back(session_id, fake_uuid).is_err());
         assert!(mgr.navigate_forward(session_id, fake_uuid).is_err());
+    }
+
+    #[test]
+    fn test_tab_history_bounded_evicts_oldest() {
+        let mgr = SessionManager::new();
+        let session_id = mgr.create_session("Bounded", "file:///step/0");
+        let tab_id = mgr.get_session(session_id).unwrap().active_tab_id;
+
+        for i in 1..=300 {
+            mgr.navigate_tab(session_id, tab_id, &format!("file:///step/{}", i))
+                .expect("navigate should succeed");
+        }
+
+        let s = mgr.get_session(session_id).unwrap();
+        let tab = &s.tabs[0];
+        assert_eq!(tab.history_back.len(), MAX_TAB_HISTORY_ENTRIES);
+        assert_eq!(tab.history_entries.len(), MAX_TAB_HISTORY_ENTRIES);
+        assert_eq!(tab.history_back.first().map(String::as_str), Some("file:///step/44"));
+        assert_eq!(tab.history_back.last().map(String::as_str), Some("file:///step/299"));
+        assert_eq!(tab.history_entries.first().map(|h| h.uri.as_str()), Some("file:///step/45"));
+        assert_eq!(tab.history_entries.last().map(|h| h.uri.as_str()), Some("file:///step/300"));
     }
 }

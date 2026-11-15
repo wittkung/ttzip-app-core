@@ -11,18 +11,15 @@
 //! [`ttzip_types::UnifiedVfsTable`] instances.
 
 pub mod adb;
-pub mod adb_socket;
-pub mod checkpoint;
 pub mod entry;
+pub mod integrity;
 pub mod mtp;
-pub mod mtp_bulk;
 
+pub use adb::adb_socket::{self, AdbSmartSocketClient};
 pub use entry::DeviceEntry;
-pub use adb_socket::AdbSmartSocketClient;
-pub use mtp_bulk::{parse_object_prop_list, MtpBulkFetcher};
-
-pub use checkpoint::{
-    crc32c, crc32c_update, CHUNK_PROBE_SIZE,
+pub use integrity::checkpoint::{self, crc32c, crc32c_update, CHUNK_PROBE_SIZE};
+pub use mtp::mtp_bulk::{
+    self, parse_object_prop_list, MtpBulkFetcher,
 };
 
 pub use adb::{

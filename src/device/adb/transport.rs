@@ -368,91 +368,94 @@ fn verify_connect_payload(payload: &str) -> Result<(), AdbTransportError> {
     )))
 }
 
+fn is_ignored_adb_device_line(trimmed: &str) -> bool {
+    trimmed.is_empty()
+        || trimmed.starts_with('*')
+        || trimmed.starts_with("List of devices")
+        || trimmed.starts_with("error:")
+        || trimmed.starts_with("adb:")
+}
+
+fn parse_adb_device_state<'a, I>(state_token: &str, parts: &mut std::iter::Peekable<I>) -> AdbDeviceState
+where
+    I: Iterator<Item = &'a str>,
+{
+    match state_token {
+        "device" => AdbDeviceState::Device,
+        "unauthorized" => AdbDeviceState::Unauthorized,
+        "authorizing" => AdbDeviceState::Authorizing,
+        "offline" => AdbDeviceState::Offline,
+        "connecting" => AdbDeviceState::Connecting,
+        "recovery" | "rescue" => AdbDeviceState::Recovery,
+        "sideload" => AdbDeviceState::Sideload,
+        "bootloader" | "fastboot" => AdbDeviceState::Bootloader,
+        "no" if parts.peek().map(|s| s.trim()) == Some("permissions") => {
+            let _ = parts.next();
+            AdbDeviceState::NoPermissions
+        }
+        unknown_state => AdbDeviceState::Unknown(unknown_state.to_string()),
+    }
+}
+
+fn classify_adb_transport_type(serial: &str) -> AdbTransportType {
+    if serial.starts_with("emulator-") {
+        AdbTransportType::Emulator
+    } else if serial.starts_with('[') {
+        if serial.contains("]:") { AdbTransportType::Tcp } else { AdbTransportType::Usb }
+    } else if serial.contains(':') {
+        AdbTransportType::Tcp
+    } else {
+        AdbTransportType::Usb
+    }
+}
+
+fn apply_adb_device_attribute(device: &mut AdbDevice, token: &str) {
+    if let Some(val) = token.strip_prefix("model:") {
+        device.model = Some(val.trim().to_string());
+    } else if let Some(val) = token.strip_prefix("product:") {
+        device.product = Some(val.trim().to_string());
+    } else if let Some(val) = token.strip_prefix("device:") {
+        device.device = Some(val.trim().to_string());
+    } else if let Some(val) = token.strip_prefix("transport_id:") {
+        device.transport_id = val.trim().parse::<u64>().ok();
+    } else if let Some(val) = token.strip_prefix("features:") {
+        device.features.extend(
+            val.trim().split(',').map(str::trim).filter(|f| !f.is_empty()).map(str::to_string),
+        );
+    }
+}
+
 /// Parses an ADB host:devices-l output line into an AdbDevice struct.
 /// Returns `None` for empty lines, daemon headers ("List of devices attached"),
 /// server logs ("* daemon ... *"), or unrecognized non-device output lines.
 pub fn parse_adb_device_line(line: &str) -> Option<AdbDevice> {
     let trimmed = line.trim();
-    if trimmed.is_empty()
-        || trimmed.starts_with('*')
-        || trimmed.starts_with("List of devices")
-        || trimmed.starts_with("error:")
-        || trimmed.starts_with("adb:")
-    {
+    if is_ignored_adb_device_line(trimmed) {
         return None;
     }
 
     let mut parts = trimmed.split_whitespace().peekable();
     let serial = parts.next()?.trim().to_string();
     let state_token = parts.next()?.trim();
+    let state = parse_adb_device_state(state_token, &mut parts);
+    let transport_type = classify_adb_transport_type(&serial);
 
-    let state = match state_token {
-        "device" => AdbDeviceState::Device,
-        "unauthorized" => AdbDeviceState::Unauthorized,
-        "authorizing" => AdbDeviceState::Authorizing,
-        "offline" => AdbDeviceState::Offline,
-        "connecting" => AdbDeviceState::Connecting,
-        "recovery" => AdbDeviceState::Recovery,
-        "sideload" => AdbDeviceState::Sideload,
-        "bootloader" | "fastboot" => AdbDeviceState::Bootloader,
-        "rescue" => AdbDeviceState::Recovery,
-        "no" if parts.peek().map(|s| s.trim()) == Some("permissions") => {
-            let _ = parts.next(); // Consume "permissions"
-            AdbDeviceState::NoPermissions
-        }
-        unknown_state => AdbDeviceState::Unknown(unknown_state.to_string()),
-    };
-
-    let mut model = None;
-    let mut product = None;
-    let mut device = None;
-    let mut transport_id = None;
-    let mut features = std::collections::HashSet::new();
-
-    for part in parts {
-        let part = part.trim();
-        if let Some(val) = part.strip_prefix("model:") {
-            model = Some(val.trim().to_string());
-        } else if let Some(val) = part.strip_prefix("product:") {
-            product = Some(val.trim().to_string());
-        } else if let Some(val) = part.strip_prefix("device:") {
-            device = Some(val.trim().to_string());
-        } else if let Some(val) = part.strip_prefix("transport_id:") {
-            transport_id = val.trim().parse::<u64>().ok();
-        } else if let Some(val) = part.strip_prefix("features:") {
-            for feat in val.trim().split(',') {
-                let f = feat.trim();
-                if !f.is_empty() {
-                    features.insert(f.to_string());
-                }
-            }
-        }
-    }
-
-    let transport_type = if serial.starts_with("emulator-") {
-        AdbTransportType::Emulator
-    } else if serial.starts_with('[') {
-        if serial.contains("]:") {
-            AdbTransportType::Tcp
-        } else {
-            AdbTransportType::Usb
-        }
-    } else if serial.contains(':') {
-        AdbTransportType::Tcp
-    } else {
-        AdbTransportType::Usb
-    };
-
-    Some(AdbDevice {
+    let mut adb_device = AdbDevice {
         serial,
         state,
-        model,
-        product,
-        device,
+        model: None,
+        product: None,
+        device: None,
         transport_type,
-        transport_id,
-        features,
-    })
+        transport_id: None,
+        features: std::collections::HashSet::new(),
+    };
+
+    for part in parts {
+        apply_adb_device_attribute(&mut adb_device, part.trim());
+    }
+
+    Some(adb_device)
 }
 
 /// Strongly-typed error cases encountered in ADB socket transports and daemon bridges.

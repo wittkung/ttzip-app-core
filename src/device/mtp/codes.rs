@@ -176,41 +176,45 @@ pub mod format {
     pub const MATROSKA: u16 = 0xBA03; // Standard Matroska container format code
 }
 
+const RESPONSE_CODE_NAMES: &[(u16, &str)] = &[
+    (resp::OK, "OK"),
+    (resp::GENERAL_ERROR, "General Error"),
+    (resp::SESSION_NOT_OPEN, "Session Not Open"),
+    (resp::INVALID_TRANSACTION_ID, "Invalid Transaction ID"),
+    (resp::OPERATION_NOT_SUPPORTED, "Operation Not Supported"),
+    (resp::PARAMETER_NOT_SUPPORTED, "Parameter Not Supported"),
+    (resp::INCOMPLETE_TRANSFER, "Incomplete Transfer"),
+    (resp::INVALID_STORAGE_ID, "Invalid Storage ID"),
+    (resp::INVALID_OBJECT_HANDLE, "Invalid Object Handle"),
+    (resp::DEVICE_PROP_NOT_SUPPORTED, "Device Property Not Supported"),
+    (resp::INVALID_OBJECT_FORMAT_CODE, "Invalid Object Format Code"),
+    (resp::STORE_FULL, "Store Full"),
+    (resp::OBJECT_WRITE_PROTECTED, "Object Write Protected"),
+    (resp::STORE_READ_ONLY, "Store Read Only"),
+    (resp::ACCESS_DENIED, "Access Denied"),
+    (resp::NO_THUMBNAIL_PRESENT, "No Thumbnail Present"),
+    (resp::SELF_TEST_FAILED, "Self Test Failed"),
+    (resp::PARTIAL_DELETION, "Partial Deletion"),
+    (resp::STORE_NOT_AVAILABLE, "Store Not Available"),
+    (resp::SPECIFICATION_BY_FORMAT_UNSUPPORTED, "Specification By Format Unsupported"),
+    (resp::NO_VALID_OBJECT_INFO, "No Valid Object Info"),
+    (resp::INVALID_CODE_FORMAT, "Invalid Code Format"),
+    (resp::UNKNOWN_VENDOR_CODE, "Unknown Vendor Code"),
+    (resp::CAPTURE_ALREADY_TERMINATED, "Capture Already Terminated"),
+    (resp::DEVICE_BUSY, "Device Busy"),
+    (resp::INVALID_PARENT_OBJECT, "Invalid Parent Object"),
+    (resp::INVALID_DEVICE_PROP_FORMAT, "Invalid Device Property Format"),
+    (resp::INVALID_DEVICE_PROP_VALUE, "Invalid Device Property Value"),
+    (resp::INVALID_PARAMETER, "Invalid Parameter"),
+    (resp::SESSION_ALREADY_OPEN, "Session Already Open"),
+    (resp::TRANSACTION_CANCELLED, "Transaction Cancelled"),
+    (resp::DESTINATION_UNSUPPORTED, "Destination Unsupported"),
+];
+
 /// Helper returning human-readable string for MTP response code.
 pub fn response_code_to_str(code: u16) -> &'static str {
-    match code {
-        resp::OK => "OK",
-        resp::GENERAL_ERROR => "General Error",
-        resp::SESSION_NOT_OPEN => "Session Not Open",
-        resp::INVALID_TRANSACTION_ID => "Invalid Transaction ID",
-        resp::OPERATION_NOT_SUPPORTED => "Operation Not Supported",
-        resp::PARAMETER_NOT_SUPPORTED => "Parameter Not Supported",
-        resp::INCOMPLETE_TRANSFER => "Incomplete Transfer",
-        resp::INVALID_STORAGE_ID => "Invalid Storage ID",
-        resp::INVALID_OBJECT_HANDLE => "Invalid Object Handle",
-        resp::DEVICE_PROP_NOT_SUPPORTED => "Device Property Not Supported",
-        resp::INVALID_OBJECT_FORMAT_CODE => "Invalid Object Format Code",
-        resp::STORE_FULL => "Store Full",
-        resp::OBJECT_WRITE_PROTECTED => "Object Write Protected",
-        resp::STORE_READ_ONLY => "Store Read Only",
-        resp::ACCESS_DENIED => "Access Denied",
-        resp::NO_THUMBNAIL_PRESENT => "No Thumbnail Present",
-        resp::SELF_TEST_FAILED => "Self Test Failed",
-        resp::PARTIAL_DELETION => "Partial Deletion",
-        resp::STORE_NOT_AVAILABLE => "Store Not Available",
-        resp::SPECIFICATION_BY_FORMAT_UNSUPPORTED => "Specification By Format Unsupported",
-        resp::NO_VALID_OBJECT_INFO => "No Valid Object Info",
-        resp::INVALID_CODE_FORMAT => "Invalid Code Format",
-        resp::UNKNOWN_VENDOR_CODE => "Unknown Vendor Code",
-        resp::CAPTURE_ALREADY_TERMINATED => "Capture Already Terminated",
-        resp::DEVICE_BUSY => "Device Busy",
-        resp::INVALID_PARENT_OBJECT => "Invalid Parent Object",
-        resp::INVALID_DEVICE_PROP_FORMAT => "Invalid Device Property Format",
-        resp::INVALID_DEVICE_PROP_VALUE => "Invalid Device Property Value",
-        resp::INVALID_PARAMETER => "Invalid Parameter",
-        resp::SESSION_ALREADY_OPEN => "Session Already Open",
-        resp::TRANSACTION_CANCELLED => "Transaction Cancelled",
-        resp::DESTINATION_UNSUPPORTED => "Destination Unsupported",
-        _ => "Unknown Response Code",
-    }
+    RESPONSE_CODE_NAMES
+        .iter()
+        .find_map(|&(candidate, label)| (candidate == code).then_some(label))
+        .unwrap_or("Unknown Response Code")
 }

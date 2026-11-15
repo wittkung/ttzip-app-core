@@ -272,51 +272,58 @@ impl Drop for RusbTransport {
     }
 }
 
+fn is_mtp_interface(interface_desc: &rusb::InterfaceDescriptor<'_>) -> bool {
+    let class = interface_desc.class_code();
+    let sub_class = interface_desc.sub_class_code();
+    let protocol = interface_desc.protocol_code();
+    let is_ptp_class = class == 0x06 && sub_class == 0x01 && protocol == 0x01;
+    let is_adb = class == 0xFF && sub_class == 0x42 && protocol == 0x01;
+    let is_vendor_mtp = class == 0xFF && !is_adb;
+    is_ptp_class || is_vendor_mtp
+}
+
+fn extract_mtp_endpoints_from_interface(
+    interface_desc: &rusb::InterfaceDescriptor<'_>,
+) -> Option<MtpEndpoints> {
+    if !is_mtp_interface(interface_desc) {
+        return None;
+    }
+
+    let mut bulk_in = None;
+    let mut bulk_out = None;
+    let mut interrupt_in = None;
+
+    for ep in interface_desc.endpoint_descriptors() {
+        match (ep.direction(), ep.transfer_type()) {
+            (Direction::In, TransferType::Bulk) => bulk_in = Some(ep.address()),
+            (Direction::Out, TransferType::Bulk) => bulk_out = Some(ep.address()),
+            (Direction::In, TransferType::Interrupt) => interrupt_in = Some(ep.address()),
+            _ => {}
+        }
+    }
+
+    Some(MtpEndpoints {
+        interface_number: interface_desc.interface_number(),
+        bulk_in: bulk_in?,
+        bulk_out: bulk_out?,
+        interrupt_in,
+    })
+}
+
 /// Inspects USB device interfaces to locate valid MTP endpoints.
 pub fn inspect_device_endpoints<T: UsbContext>(
     device: &Device<T>,
     desc: &DeviceDescriptor,
 ) -> Result<Option<MtpEndpoints>, AppCoreError> {
     for config_idx in 0..desc.num_configurations() {
-        let config_desc = match device.config_descriptor(config_idx) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let Ok(config_desc) = device.config_descriptor(config_idx) else {
+            continue;
         };
 
         for interface in config_desc.interfaces() {
             for interface_desc in interface.descriptors() {
-                let is_ptp_class = interface_desc.class_code() == 0x06
-                    && interface_desc.sub_class_code() == 0x01
-                    && interface_desc.protocol_code() == 0x01;
-                let is_adb = interface_desc.class_code() == 0xFF
-                    && interface_desc.sub_class_code() == 0x42
-                    && interface_desc.protocol_code() == 0x01;
-                let is_vendor_mtp = interface_desc.class_code() == 0xFF && !is_adb;
-
-                if is_ptp_class || is_vendor_mtp {
-                    let mut bulk_in = None;
-                    let mut bulk_out = None;
-                    let mut interrupt_in = None;
-
-                    for ep in interface_desc.endpoint_descriptors() {
-                        match (ep.direction(), ep.transfer_type()) {
-                            (Direction::In, TransferType::Bulk) => bulk_in = Some(ep.address()),
-                            (Direction::Out, TransferType::Bulk) => bulk_out = Some(ep.address()),
-                            (Direction::In, TransferType::Interrupt) => {
-                                interrupt_in = Some(ep.address())
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    if let (Some(b_in), Some(b_out)) = (bulk_in, bulk_out) {
-                        return Ok(Some(MtpEndpoints {
-                            interface_number: interface_desc.interface_number(),
-                            bulk_in: b_in,
-                            bulk_out: b_out,
-                            interrupt_in,
-                        }));
-                    }
+                if let Some(endpoints) = extract_mtp_endpoints_from_interface(&interface_desc) {
+                    return Ok(Some(endpoints));
                 }
             }
         }

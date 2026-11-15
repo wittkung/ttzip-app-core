@@ -27,6 +27,12 @@ Build the Rust static library and package the XCFramework:
 The script writes `Frameworks/TTZipAppCoreVendor.xcframework` and
 `Frameworks/libttzip_desktop.a`. Both are build artifacts and are not tracked.
 
+For a release framework, set `TTZIP_SYS_LIB_DIR` to the staged static
+`libdeflate.a`, `liblz4.a`, and `libzstd.a` archives built for macOS 14.0 or
+earlier. Include gzip in libdeflate and base, HC, and frame support in LZ4.
+For `--universal`, place each architecture's thin archives under `arm64/` and
+`x86_64/` in that directory. Release builds compile the pinned libusb source.
+
 ## Test
 
 ```sh

@@ -137,6 +137,81 @@ pub enum AdbSyncResponse {
 }
 
 impl AdbSyncResponse {
+    fn parse_stat_frame(src: &mut BytesMut) -> Result<Option<Self>, AdbSyncError> {
+        if src.len() < STAT_RESPONSE_SIZE {
+            src.reserve(STAT_RESPONSE_SIZE - src.len());
+            return Ok(None);
+        }
+        let (mode, size, mtime) = parse_stat_fields(&src[..STAT_RESPONSE_SIZE]);
+        src.advance(STAT_RESPONSE_SIZE);
+        Ok(Some(Self::Stat { mode, size, mtime }))
+    }
+
+    fn parse_dent_frame(src: &mut BytesMut) -> Result<Option<Self>, AdbSyncError> {
+        if src.len() < DENT_HEADER_SIZE {
+            src.reserve(DENT_HEADER_SIZE - src.len());
+            return Ok(None);
+        }
+        let (mode, size, mtime) = parse_stat_fields(&src[..DENT_HEADER_SIZE]);
+        let namelen = u32::from_le_bytes([src[16], src[17], src[18], src[19]]) as usize;
+        let total = DENT_HEADER_SIZE.checked_add(namelen).ok_or(AdbSyncError::PayloadTooLarge {
+            max: usize::MAX,
+            actual: namelen,
+        })?;
+        if src.len() < total {
+            src.reserve(total - src.len());
+            return Ok(None);
+        }
+        src.advance(DENT_HEADER_SIZE);
+        let name = String::from_utf8_lossy(&src.split_to(namelen)).to_string();
+        Ok(Some(Self::Dent { mode, size, mtime, name }))
+    }
+
+    fn parse_data_frame(src: &mut BytesMut, chunk_len: usize) -> Result<Option<Self>, AdbSyncError> {
+        let total = SYNC_HEADER_SIZE.checked_add(chunk_len).ok_or(AdbSyncError::PayloadTooLarge {
+            max: usize::MAX,
+            actual: chunk_len,
+        })?;
+        if src.len() < total {
+            src.reserve(total - src.len());
+            return Ok(None);
+        }
+        src.advance(SYNC_HEADER_SIZE);
+        let payload = if chunk_len == 0 { Bytes::new() } else { src.split_to(chunk_len).freeze() };
+        Ok(Some(Self::Data { payload }))
+    }
+
+    fn parse_done_frame(src: &mut BytesMut, arg: u32) -> Self {
+        let adv = if src.len() >= 20 && src[8..20].iter().all(|&b| b == 0) {
+            20
+        } else {
+            SYNC_HEADER_SIZE
+        };
+        src.advance(adv);
+        Self::Done { arg }
+    }
+
+    fn parse_fail_frame(
+        src: &mut BytesMut,
+        header_len: usize,
+        msg_len: usize,
+        trim: bool,
+    ) -> Result<Option<Self>, AdbSyncError> {
+        let total = header_len.checked_add(msg_len).ok_or(AdbSyncError::PayloadTooLarge {
+            max: usize::MAX,
+            actual: msg_len,
+        })?;
+        if src.len() < total {
+            src.reserve(total - src.len());
+            return Ok(None);
+        }
+        src.advance(header_len);
+        let raw_bytes = src.split_to(msg_len);
+        let raw = String::from_utf8_lossy(&raw_bytes);
+        let message = if trim { raw.trim().to_string() } else { raw.to_string() };
+        Ok(Some(Self::Fail { message }))
+    }
+
     /// Attempts to parse a complete response frame from a `BytesMut` buffer.
     /// Fixed-size headers are sliced with `&src[..HEADER_SIZE]`, eliminating all inner bounds checks.
     pub fn parse_frame_zero_copy(src: &mut BytesMut) -> Result<Option<Self>, AdbSyncError> {
@@ -148,77 +223,20 @@ impl AdbSyncResponse {
         let arg = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
 
         match &id {
-            id if id == sync_cmd::STAT => {
-                if src.len() < STAT_RESPONSE_SIZE {
-                    src.reserve(STAT_RESPONSE_SIZE - src.len());
-                    return Ok(None);
-                }
-                let (mode, size, mtime) = parse_stat_fields(&src[..STAT_RESPONSE_SIZE]);
-                src.advance(STAT_RESPONSE_SIZE);
-                Ok(Some(Self::Stat { mode, size, mtime }))
-            }
-            id if id == sync_cmd::DENT => {
-                if src.len() < DENT_HEADER_SIZE {
-                    src.reserve(DENT_HEADER_SIZE - src.len());
-                    return Ok(None);
-                }
-                let (mode, size, mtime) = parse_stat_fields(&src[..DENT_HEADER_SIZE]);
-                let namelen = u32::from_le_bytes([src[16], src[17], src[18], src[19]]) as usize;
-                let total = DENT_HEADER_SIZE.checked_add(namelen).ok_or(AdbSyncError::PayloadTooLarge {
-                    max: usize::MAX, actual: namelen,
-                })?;
-                if src.len() < total {
-                    src.reserve(total - src.len());
-                    return Ok(None);
-                }
-                src.advance(DENT_HEADER_SIZE);
-                let name = String::from_utf8_lossy(&src.split_to(namelen)).to_string();
-                Ok(Some(Self::Dent { mode, size, mtime, name }))
-            }
-            id if id == sync_cmd::DATA => {
-                let chunk_len = arg as usize;
-                let total = SYNC_HEADER_SIZE.checked_add(chunk_len).ok_or(AdbSyncError::PayloadTooLarge {
-                    max: usize::MAX, actual: chunk_len,
-                })?;
-                if src.len() < total {
-                    src.reserve(total - src.len());
-                    return Ok(None);
-                }
+            sync_cmd::STAT => Self::parse_stat_frame(src),
+            sync_cmd::DENT => Self::parse_dent_frame(src),
+            sync_cmd::DATA => Self::parse_data_frame(src, arg as usize),
+            sync_cmd::DONE => Ok(Some(Self::parse_done_frame(src, arg))),
+            sync_cmd::OKAY => {
                 src.advance(SYNC_HEADER_SIZE);
-                let payload = if chunk_len == 0 { Bytes::new() } else { src.split_to(chunk_len).freeze() };
-                Ok(Some(Self::Data { payload }))
+                Ok(Some(Self::Okay { arg }))
             }
-            id if id == sync_cmd::DONE => {
-                let adv = if src.len() >= 20 && src[8..20].iter().all(|&b| b == 0) { 20 } else { SYNC_HEADER_SIZE };
-                src.advance(adv);
-                Ok(Some(Self::Done { arg }))
+            sync_cmd::FAIL => {
+                Self::parse_fail_frame(src, SYNC_HEADER_SIZE, arg as usize, false)
             }
-            id if id == sync_cmd::OKAY => { src.advance(SYNC_HEADER_SIZE); Ok(Some(Self::Okay { arg })) }
-            id if id == sync_cmd::FAIL => {
-                let msg_len = arg as usize;
-                let total = SYNC_HEADER_SIZE.checked_add(msg_len).ok_or(AdbSyncError::PayloadTooLarge {
-                    max: usize::MAX, actual: msg_len,
-                })?;
-                if src.len() < total {
-                    src.reserve(total - src.len());
-                    return Ok(None);
-                }
-                src.advance(SYNC_HEADER_SIZE);
-                let message = String::from_utf8_lossy(&src.split_to(msg_len)).to_string();
-                Ok(Some(Self::Fail { message }))
-            }
-            id if (id[0] == 0x01 || id[0] == 0x02) && id[3] == 0 => {
+            [0x01 | 0x02, _, _, 0] => {
                 let msg_len = u32::from_le_bytes([header[1], header[2], header[3], header[4]]) as usize;
-                let total = 5usize.checked_add(msg_len).ok_or(AdbSyncError::PayloadTooLarge {
-                    max: usize::MAX, actual: msg_len,
-                })?;
-                if src.len() < total {
-                    src.reserve(total - src.len());
-                    return Ok(None);
-                }
-                src.advance(5);
-                let message = String::from_utf8_lossy(&src.split_to(msg_len)).trim().to_string();
-                Ok(Some(Self::Fail { message }))
+                Self::parse_fail_frame(src, 5, msg_len, true)
             }
             _ => Err(AdbSyncError::UnexpectedResponse {
                 operation: "parse_frame",

@@ -27,7 +27,7 @@ SKIP_UNIFFI=0
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo "Options:"
-    echo "  --release        Build in release mode with optimizations (default)"
+    echo "  --release        Build in release mode with the pinned rustup toolchain (default)"
     echo "  --debug          Build in debug mode"
     echo "  --universal      Build universal fat binary (arm64 + x86_64)"
     echo "  --target <TRGT>  Build specific target architecture (e.g. aarch64-apple-darwin)"
@@ -113,11 +113,42 @@ else
     fi
 fi
 
+if [ "${BUILD_MODE}" = release ]; then
+    release_codec_helper="${SCRIPT_DIR}/release_codec_stage.sh"
+    if [ ! -f "${release_codec_helper}" ] && [ -n "${CORE_DIR:-}" ]; then
+        release_codec_helper="${CORE_DIR}/scripts/release_codec_stage.sh"
+    fi
+    source "${release_codec_helper}"
+    prepare_release_codec_stages "${TARGETS[@]}"
+fi
+
+CARGO=(cargo)
+if [ "${BUILD_MODE}" = "release" ]; then
+    # Use the rustup sysroot with a macOS 14-compatible floor and macOS 27 strip support.
+    RUST_VERSION="1.99.1"
+    RUSTUP="$(command -v rustup || printf '%s\n' "${CARGO_HOME:-${HOME}/.cargo}/bin/rustup")"
+    if ! RUSTC="$("${RUSTUP}" which --toolchain "${RUST_VERSION}" rustc)"; then
+        echo "error: install the release Rust toolchain with: rustup toolchain install ${RUST_VERSION}" >&2
+        exit 1
+    fi
+    export RUSTC RUSTC_WRAPPER="" RUSTC_WORKSPACE_WRAPPER=""
+    CARGO=("${RUSTUP}" run "${RUST_VERSION}" cargo)
+    "${RUSTC}" --version
+    for target in "${TARGETS[@]}"; do
+        target_libdir="$("${RUSTC}" --print target-libdir --target "${target}")"
+        if [ ! -d "${target_libdir}" ]; then
+            echo "error: install the release target with: rustup target add --toolchain ${RUST_VERSION} ${target}" >&2
+            exit 1
+        fi
+        echo "--> Rust target libraries: ${target_libdir}"
+    done
+fi
+
 if [ "${FORCE_REBUILD}" -eq 1 ]; then
     echo "--> [INFO] Forcing full clean rebuild..."
-    cargo clean --manifest-path "${APP_CORE_DIR}/Cargo.toml"
+    "${CARGO[@]}" clean --manifest-path "${APP_CORE_DIR}/Cargo.toml"
     if [ -n "${CORE_RUST_DIR}" ] && [ -f "${CORE_RUST_DIR}/Cargo.toml" ]; then
-        cargo clean --manifest-path "${CORE_RUST_DIR}/Cargo.toml"
+        "${CARGO[@]}" clean --manifest-path "${CORE_RUST_DIR}/Cargo.toml"
     fi
     rm -rf "${XCFRAMEWORK_DIR}" "${FRAMEWORKS_DIR}/libttzip_desktop.a"
 fi
@@ -151,10 +182,18 @@ unset IFS
 export LIBRARY_PATH="${RESOLVED_LIB_PATH:+${RESOLVED_LIB_PATH}:}${LIBRARY_PATH:-}"
 
 PER_TARGET_MERGED=()
-for target in "${TARGETS[@]}"; do
+for index in "${!TARGETS[@]}"; do
+    target="${TARGETS[index]}"
+    release_stage=""
+    usb_features=()
+    if [ "${BUILD_MODE}" = release ]; then
+        release_stage="${RELEASE_CODEC_STAGES[index]}"
+        usb_features=(--features rusb/vendored)
+    fi
     echo "--> [INFO] Compiling ttzip_app_core staticlib for ${target} (${BUILD_MODE})..."
-    (cd "${APP_CORE_DIR}" && cargo build \
+    (cd "${APP_CORE_DIR}" && TTZIP_RELEASE_CODEC_STAGE="${release_stage}" "${CARGO[@]}" build \
         --target "${target}" \
+        ${usb_features[@]+"${usb_features[@]}"} \
         ${CARGO_FLAGS} \
         ${OFFLINE_FLAG})
 
@@ -169,13 +208,13 @@ for target in "${TARGETS[@]}"; do
     # Build or link ttzip-engine from core repository if available
     if [ -n "${CORE_RUST_DIR}" ] && [ -f "${CORE_RUST_DIR}/Cargo.toml" ]; then
         echo "--> [INFO] Compiling ttzip-engine core staticlib for ${target} (${BUILD_MODE})..."
-        cargo build \
+        TTZIP_RELEASE_CODEC_STAGE="${release_stage}" "${CARGO[@]}" build \
             --manifest-path "${CORE_RUST_DIR}/Cargo.toml" \
             --package ttzip-engine \
             --features full \
             --target "${target}" \
             ${CARGO_FLAGS} \
-            ${OFFLINE_FLAG} || true
+            ${OFFLINE_FLAG} || [ "${BUILD_MODE}" = debug ]
 
         CORE_TARGET_LIB="${EFFECTIVE_CORE_TARGET_DIR}/${target}/${BUILD_MODE}/libttzip_engine.a"
         if [ -f "${CORE_TARGET_LIB}" ]; then
@@ -189,35 +228,41 @@ for target in "${TARGETS[@]}"; do
         fi
     fi
 
-    # Locate vendored libusb archive produced by libusb1-sys build script
-    LIBUSB_STATIC="$(find "${EFFECTIVE_APP_TARGET_DIR}/${target}" -name "libusb-vendored.a" 2>/dev/null | head -n 1 || true)"
-    if [ -n "${LIBUSB_STATIC}" ] && [ -f "${LIBUSB_STATIC}" ]; then
-        TARGET_PARTS+=("${LIBUSB_STATIC}")
-    fi
+    if [ "${BUILD_MODE}" = release ]; then
+        for libname in "${RELEASE_CODEC_ARCHIVES[@]}"; do
+            TARGET_PARTS+=("${release_stage}/${libname}")
+        done
+    else
+        # Locate vendored libusb archive produced by libusb1-sys build script
+        LIBUSB_STATIC="$(find "${EFFECTIVE_APP_TARGET_DIR}/${target}" -name "libusb-vendored.a" 2>/dev/null | head -n 1 || true)"
+        if [ -n "${LIBUSB_STATIC}" ] && [ -f "${LIBUSB_STATIC}" ]; then
+            TARGET_PARTS+=("${LIBUSB_STATIC}")
+        fi
 
-    # Locate static external compression libraries (deflate, lz4, zstd)
-    for libname in libdeflate.a liblz4.a libzstd.a; do
-        FOUND_LIB=""
-        pkg_base="${libname#lib}"
-        pkg_base="${pkg_base%.a}"
-        if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists "${pkg_base}" 2>/dev/null; then
-            PKG_LIB_DIR="$(pkg-config --variable=libdir "${pkg_base}" 2>/dev/null || true)"
-            if [ -n "${PKG_LIB_DIR}" ] && [ -f "${PKG_LIB_DIR}/${libname}" ]; then
-                FOUND_LIB="${PKG_LIB_DIR}/${libname}"
-            fi
-        fi
-        if [ -z "${FOUND_LIB}" ]; then
-            for candidate in "${CANDIDATE_LIB_DIRS[@]}"; do
-                if [ -f "${candidate}/${libname}" ]; then
-                    FOUND_LIB="${candidate}/${libname}"
-                    break
+        # Locate static external compression libraries (deflate, lz4, zstd)
+        for libname in libdeflate.a liblz4.a libzstd.a; do
+            FOUND_LIB=""
+            pkg_base="${libname#lib}"
+            pkg_base="${pkg_base%.a}"
+            if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists "${pkg_base}" 2>/dev/null; then
+                PKG_LIB_DIR="$(pkg-config --variable=libdir "${pkg_base}" 2>/dev/null || true)"
+                if [ -n "${PKG_LIB_DIR}" ] && [ -f "${PKG_LIB_DIR}/${libname}" ]; then
+                    FOUND_LIB="${PKG_LIB_DIR}/${libname}"
                 fi
-            done
-        fi
-        if [ -n "${FOUND_LIB}" ]; then
-            TARGET_PARTS+=("${FOUND_LIB}")
-        fi
-    done
+            fi
+            if [ -z "${FOUND_LIB}" ]; then
+                for candidate in "${CANDIDATE_LIB_DIRS[@]}"; do
+                    if [ -f "${candidate}/${libname}" ]; then
+                        FOUND_LIB="${candidate}/${libname}"
+                        break
+                    fi
+                done
+            fi
+            if [ -n "${FOUND_LIB}" ]; then
+                TARGET_PARTS+=("${FOUND_LIB}")
+            fi
+        done
+    fi
 
     # Merge all target components into single monolithic slice via libtool
     PER_TARGET_OUT="$(mktemp /tmp/ttzip_desktop_${target}_XXXXXX.a)"
@@ -256,27 +301,13 @@ done
 # the same symbol, which a linker that loads every member of the archive
 # reports as a duplicate symbol.
 
-find_llvm_objcopy() {
-    local objcopy=""
-    local sysroot host
-    if command -v llvm-objcopy >/dev/null 2>&1; then
-        command -v llvm-objcopy
+resolve_archive_deduplicator() {
+    if [ -f "${SCRIPT_DIR}/deduplicate_archive.py" ]; then
+        printf '%s\n' "${SCRIPT_DIR}/deduplicate_archive.py"
         return 0
     fi
-    sysroot="$(rustc --print sysroot 2>/dev/null || true)"
-    host="$(rustc -vV 2>/dev/null | awk '/^host:/ { print $2 }' || true)"
-    if [ -n "${sysroot}" ] && [ -n "${host}" ]; then
-        local candidate="${sysroot}/lib/rustlib/${host}/bin/llvm-objcopy"
-        if [ -x "${candidate}" ]; then
-            printf '%s\n' "${candidate}"
-            return 0
-        fi
-    fi
-    local rustup_home="${RUSTUP_HOME:-${HOME}/.rustup}"
-    local candidate
-    candidate="$(ls "${rustup_home}"/toolchains/*/lib/rustlib/*/bin/llvm-objcopy 2>/dev/null | head -n 1 || true)"
-    if [ -n "${candidate}" ] && [ -x "${candidate}" ]; then
-        printf '%s\n' "${candidate}"
+    if [ -n "${CORE_DIR:-}" ] && [ -f "${CORE_DIR}/scripts/deduplicate_archive.py" ]; then
+        printf '%s\n' "${CORE_DIR}/scripts/deduplicate_archive.py"
         return 0
     fi
     return 1
@@ -284,193 +315,20 @@ find_llvm_objcopy() {
 
 strip_embedded_bitcode() {
     local archive="$1"
-    local objcopy
-    if ! objcopy="$(find_llvm_objcopy)"; then
-        echo "--> [WARN] llvm-objcopy not found; keeping the embedded bitcode in $(basename "${archive}")"
-        return 0
+    local tool
+    if tool="$(resolve_archive_deduplicator)"; then
+        python3 "${tool}" strip-bitcode "${archive}"
     fi
-    "${objcopy}" --remove-section=__LLVM,__bitcode "${archive}" >/dev/null 2>&1 || true
 }
 
 deduplicate_archive() {
     local archive="$1"
-    local workdir
-    workdir="$(mktemp -d /tmp/ttzip-dedup-XXXXXX)"
-    mkdir -p "${workdir}/readd"
-
-    # ---------------------------------------------------------------------
-    # Pass 1: one copy per member name
-    #
-    # A Rust static library bundles its upstream crates, so merging two of
-    # them carries the same object file twice. A linker that loads every
-    # member of the archive then reports duplicate symbols.
-    #
-    # Two occurrences of one member name are the same object when their bytes
-    # match, and the first one is kept. When the bytes differ the occurrences
-    # are different builds, so the symbols they define decide: an occurrence
-    # that defines a symbol no kept occurrence defines is a different variant
-    # and stays, the others are dropped.
-    #
-    # The symbol list is read with `nm`, which cannot decode the LLVM bitcode
-    # some Rust objects carry, so the byte comparison is the primary test and
-    # the symbol list is only consulted for occurrences that differ.
-    # ---------------------------------------------------------------------
-    local duplicates name total index kept_count member group
-    duplicates="$(ar -t "${archive}" | LC_ALL=C sort | uniq -d)"
-    if [ -z "${duplicates}" ]; then
-        return 0
+    local tool
+    if tool="$(resolve_archive_deduplicator)"; then
+        python3 "${tool}" deduplicate "${archive}"
+    else
+        ranlib -s "${archive}" >/dev/null 2>&1 || true
     fi
-    echo "--> [INFO] Removing duplicate members from $(basename "${archive}")"
-    cp "${archive}" "${workdir}/probe.a"
-    group=0
-    while IFS= read -r name; do
-        [ -z "${name}" ] && continue
-        total="$(ar -t "${workdir}/probe.a" | grep -c -x -F -- "${name}" || true)"
-        if [ "${total}" -le 1 ]; then
-            continue
-        fi
-        group=$((group + 1))
-        kept_count=0
-        index=0
-        : > "${workdir}/kept_symbols_${group}.txt"
-        : > "${workdir}/kept_members_${group}.txt"
-        while [ "${index}" -lt "${total}" ]; do
-            index=$((index + 1))
-            member="${workdir}/member_${group}_${index}.o"
-            ( cd "${workdir}" && ar -p probe.a "${name}" > "member_${group}_${index}.o" )
-            ( cd "${workdir}" && ar -d probe.a "${name}" ) >/dev/null 2>&1 || true
-            if [ "${kept_count}" -eq 0 ]; then
-                kept_count=1
-                cp "${member}" "${workdir}/keep_${group}_1.o"
-                printf '%s\n' "keep_${group}_1.o" >> "${workdir}/kept_members_${group}.txt"
-                nm -g "${member}" 2>/dev/null \
-                    | awk '$1 ~ /^[0-9a-fA-F]+$/ && $2 != "U" { print $NF }' \
-                    | LC_ALL=C sort -u > "${workdir}/kept_symbols_${group}.txt" || true
-                continue
-            fi
-            local identical=0 kept_member
-            while IFS= read -r kept_member; do
-                [ -z "${kept_member}" ] && continue
-                if cmp -s "${workdir}/${kept_member}" "${member}"; then
-                    identical=1
-                    break
-                fi
-            done < "${workdir}/kept_members_${group}.txt"
-            if [ "${identical}" -eq 1 ]; then
-                continue
-            fi
-            nm -g "${member}" 2>/dev/null \
-                | awk '$1 ~ /^[0-9a-fA-F]+$/ && $2 != "U" { print $NF }' \
-                | LC_ALL=C sort -u > "${workdir}/symbols_${group}_${index}.txt" || true
-            comm -23 "${workdir}/symbols_${group}_${index}.txt" "${workdir}/kept_symbols_${group}.txt" \
-                > "${workdir}/new_${group}_${index}.txt" || true
-            if [ ! -s "${workdir}/new_${group}_${index}.txt" ]; then
-                continue
-            fi
-            kept_count=$((kept_count + 1))
-            cp "${member}" "${workdir}/keep_${group}_${kept_count}.o"
-            printf '%s\n' "keep_${group}_${kept_count}.o" >> "${workdir}/kept_members_${group}.txt"
-            cat "${workdir}/new_${group}_${index}.txt" >> "${workdir}/kept_symbols_${group}.txt"
-            LC_ALL=C sort -u -o "${workdir}/kept_symbols_${group}.txt" "${workdir}/kept_symbols_${group}.txt"
-        done
-        local remaining="${total}"
-        while [ "${remaining}" -gt 0 ]; do
-            ar -d "${archive}" "${name}" >/dev/null 2>&1 || break
-            remaining=$((remaining - 1))
-        done
-        local kept_member kept_index target_name
-        kept_index=0
-        while IFS= read -r kept_member; do
-            [ -z "${kept_member}" ] && continue
-            kept_index=$((kept_index + 1))
-            target_name="${name}"
-            if [ "${kept_index}" -gt 1 ]; then
-                target_name="${name}.${kept_index}"
-            fi
-            cp "${workdir}/${kept_member}" "${workdir}/readd/${target_name}"
-            ar -r "${archive}" "${workdir}/readd/${target_name}" >/dev/null 2>&1 || true
-        done < "${workdir}/kept_members_${group}.txt"
-    done <<EOF
-${duplicates}
-EOF
-
-    # ---------------------------------------------------------------------
-    # Pass 2: one definer per symbol
-    #
-    # Rust emits the allocator shims into a separate object per crate that
-    # pulls them in, and those objects define exactly the same symbols. A
-    # member whose every symbol is already defined by an earlier member
-    # carries nothing of its own and is dropped.
-    # ---------------------------------------------------------------------
-    local round
-    for round in 1 2 3 4 5 6 7 8 9 10; do
-        nm -g "${archive}" 2>/dev/null | awk '
-            /^[^ ].*:$/ { member = $0; sub(/:$/, "", member); order[++n] = member; next }
-            $1 ~ /^[0-9a-fA-F]+$/ && $2 != "U" {
-                if (!((member SUBSEP $NF) in seen)) {
-                    seen[member, $NF] = 1
-                    syms[member] = syms[member] $NF "\n"
-                    owners[$NF] = owners[$NF] " " member
-                }
-            }
-            END {
-                for (i = 1; i <= n; i++) {
-                    m = order[i]
-                    if (!(m in syms)) continue
-                    droppable = 1
-                    split(syms[m], list, "\n")
-                    for (j in list) {
-                        s = list[j]
-                        if (s == "") continue
-                        split(owners[s], defs, " ")
-                        if (defs[1] == m) { droppable = 0; break }
-                    }
-                    if (droppable) print m
-                }
-            }
-        ' > "${workdir}/droppable.txt" || true
-        if [ ! -s "${workdir}/droppable.txt" ]; then
-            break
-        fi
-        echo "--> [INFO] Dropping $(wc -l < "${workdir}/droppable.txt" | tr -d ' ') redundant members from $(basename "${archive}")"
-        local droppable_member
-        while IFS= read -r droppable_member; do
-            [ -z "${droppable_member}" ] && continue
-            ar -d "${archive}" "${droppable_member}" >/dev/null 2>&1 || true
-        done < "${workdir}/droppable.txt"
-    done
-
-
-    # ---------------------------------------------------------------------
-    # Pass 3: weaken the symbols that more than one member defines
-    #
-    # A crate that is compiled by two workspaces with different build flags
-    # ends up in the archive twice, under two different member names. The
-    # `#[no_mangle]` symbols of such a crate are then defined twice, and a
-    # linker that loads every member of the archive reports them as duplicate
-    # symbols. Weakening every copy of such a symbol lets the linker pick one
-    # of them instead.
-    # ---------------------------------------------------------------------
-    local duplicate_symbols objcopy
-    duplicate_symbols="$(nm -g "${archive}" 2>/dev/null | awk '
-        /^[^ ].*:$/ { next }
-        $1 ~ /^[0-9a-fA-F]+$/ && $2 != "U" { print $NF }
-    ' | LC_ALL=C sort | uniq -d || true)"
-    if [ -n "${duplicate_symbols}" ] && objcopy="$(find_llvm_objcopy)"; then
-        local weaken_args=()
-        while IFS= read -r duplicate_symbol; do
-            [ -z "${duplicate_symbol}" ] && continue
-            weaken_args+=("--weaken-symbol=${duplicate_symbol}")
-        done <<EOF
-${duplicate_symbols}
-EOF
-        if [ ${#weaken_args[@]} -gt 0 ]; then
-            echo "--> [INFO] Weakening $(wc -l <<< "${duplicate_symbols}" | tr -d ' ') duplicated symbols in $(basename "${archive}")"
-            "${objcopy}" "${weaken_args[@]}" "${archive}" >/dev/null 2>&1 || true
-        fi
-    fi
-    ranlib -s "${archive}" >/dev/null 2>&1 || true
-    rm -rf "${workdir}"
 }
 
 # Prepare final single or universal static library

@@ -220,6 +220,36 @@ impl<'a> IntoIterator for &'a MtpError {
     }
 }
 
+fn protocol_code_to_io_kind(code: u16) -> std::io::ErrorKind {
+    match code {
+        resp::OPERATION_NOT_SUPPORTED
+        | resp::PARAMETER_NOT_SUPPORTED
+        | resp::SPECIFICATION_BY_FORMAT_UNSUPPORTED
+        | resp::DESTINATION_UNSUPPORTED
+        | resp::DEVICE_PROP_NOT_SUPPORTED => std::io::ErrorKind::Unsupported,
+        resp::ACCESS_DENIED | resp::STORE_READ_ONLY | resp::OBJECT_WRITE_PROTECTED => {
+            std::io::ErrorKind::PermissionDenied
+        }
+        resp::INVALID_OBJECT_HANDLE
+        | resp::INVALID_STORAGE_ID
+        | resp::INVALID_PARENT_OBJECT
+        | resp::NO_THUMBNAIL_PRESENT
+        | resp::NO_VALID_OBJECT_INFO => std::io::ErrorKind::NotFound,
+        resp::SESSION_NOT_OPEN | resp::STORE_NOT_AVAILABLE => std::io::ErrorKind::NotConnected,
+        resp::STORE_FULL => std::io::ErrorKind::StorageFull,
+        resp::DEVICE_BUSY => std::io::ErrorKind::ResourceBusy,
+        resp::INCOMPLETE_TRANSFER => std::io::ErrorKind::UnexpectedEof,
+        resp::INVALID_TRANSACTION_ID
+        | resp::INVALID_OBJECT_FORMAT_CODE
+        | resp::INVALID_CODE_FORMAT
+        | resp::INVALID_DEVICE_PROP_FORMAT
+        | resp::INVALID_DEVICE_PROP_VALUE
+        | resp::INVALID_PARAMETER => std::io::ErrorKind::InvalidInput,
+        resp::TRANSACTION_CANCELLED => std::io::ErrorKind::Interrupted,
+        _ => std::io::ErrorKind::Other,
+    }
+}
+
 impl From<MtpError> for std::io::Error {
     #[inline]
     fn from(err: MtpError) -> Self {
@@ -247,36 +277,7 @@ impl From<MtpError> for std::io::Error {
                 format!("Hardware signal: {sig}"),
             ),
             err @ MtpError::Protocol { code, .. } => {
-                let kind = match code {
-                    resp::OPERATION_NOT_SUPPORTED
-                    | resp::PARAMETER_NOT_SUPPORTED
-                    | resp::SPECIFICATION_BY_FORMAT_UNSUPPORTED
-                    | resp::DESTINATION_UNSUPPORTED
-                    | resp::DEVICE_PROP_NOT_SUPPORTED => std::io::ErrorKind::Unsupported,
-                    resp::ACCESS_DENIED | resp::STORE_READ_ONLY | resp::OBJECT_WRITE_PROTECTED => {
-                        std::io::ErrorKind::PermissionDenied
-                    }
-                    resp::INVALID_OBJECT_HANDLE
-                    | resp::INVALID_STORAGE_ID
-                    | resp::INVALID_PARENT_OBJECT
-                    | resp::NO_THUMBNAIL_PRESENT
-                    | resp::NO_VALID_OBJECT_INFO => std::io::ErrorKind::NotFound,
-                    resp::SESSION_NOT_OPEN | resp::STORE_NOT_AVAILABLE => {
-                        std::io::ErrorKind::NotConnected
-                    }
-                    resp::STORE_FULL => std::io::ErrorKind::StorageFull,
-                    resp::DEVICE_BUSY => std::io::ErrorKind::ResourceBusy,
-                    resp::INCOMPLETE_TRANSFER => std::io::ErrorKind::UnexpectedEof,
-                    resp::INVALID_TRANSACTION_ID
-                    | resp::INVALID_OBJECT_FORMAT_CODE
-                    | resp::INVALID_CODE_FORMAT
-                    | resp::INVALID_DEVICE_PROP_FORMAT
-                    | resp::INVALID_DEVICE_PROP_VALUE
-                    | resp::INVALID_PARAMETER => std::io::ErrorKind::InvalidInput,
-                    resp::TRANSACTION_CANCELLED => std::io::ErrorKind::Interrupted,
-                    _ => std::io::ErrorKind::Other,
-                };
-                std::io::Error::new(kind, err)
+                std::io::Error::new(protocol_code_to_io_kind(code), err)
             }
         }
     }

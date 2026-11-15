@@ -135,7 +135,11 @@ pub fn classify_extension(ext: &str) -> TileCategory {
 
         // Compressed archives
         "zip" | "tar" | "gz" | "tgz" | "7z" | "rar" | "bz2" | "tbz2" | "xz" | "txz" | "zst"
-        | "lzma" | "cab" | "iso" | "dmg" => TileCategory::CompressedArchive,
+        | "lzma" | "cab" | "iso" | "dmg" | "lz4" | "br" | "sz" | "snappy" | "lz" | "lrz"
+        | "lzfse" | "lzh" | "lha" | "cpio" | "ar" | "deb" | "rpm" | "xar" | "squashfs" | "wim"
+        | "aar" | "z" | "taz" | "tb2" | "tbz" | "tlz" | "tzst" | "tbr" | "tlz4" | "tlrz" => {
+            TileCategory::CompressedArchive
+        }
 
         // Textual and productivity documents
         "pdf" | "docx" | "doc" | "rtf" | "txt" | "md" | "markdown" | "csv" | "xlsx" | "xls"
@@ -231,5 +235,33 @@ mod tests {
             classify_tile_category("libttzip.dylib", false),
             TileCategory::ExecutableBinary
         );
+    }
+
+    #[test]
+    fn test_all_engine_archive_extensions_classify_as_compressed_archive() {
+        let extensions = [
+            "zip", "tar", "gz", "tgz", "7z", "rar", "bz2", "tbz2", "xz", "txz", "zst", "lzma",
+            "cab", "iso", "dmg", "lz4", "br", "sz", "snappy", "lz", "lrz", "lzfse", "lzh", "lha",
+            "cpio", "ar", "deb", "rpm", "xar", "squashfs", "wim", "aar", "z", "taz", "tb2", "tbz",
+            "tlz", "tzst", "tbr", "tlz4", "tlrz",
+        ];
+        for ext in extensions {
+            assert_eq!(
+                classify_extension(ext),
+                TileCategory::CompressedArchive,
+                "Extension '{ext}' must classify as CompressedArchive"
+            );
+            assert_eq!(
+                classify_extension(&ext.to_ascii_uppercase()),
+                TileCategory::CompressedArchive,
+                "Uppercase extension '{ext}' must classify as CompressedArchive"
+            );
+            let filename = format!("sample.{ext}");
+            assert_eq!(
+                classify_tile_category(&filename, false),
+                TileCategory::CompressedArchive,
+                "Filename '{filename}' must classify as CompressedArchive"
+            );
+        }
     }
 }

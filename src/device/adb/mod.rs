@@ -24,6 +24,7 @@ use std::io::{Read, Write};
 use crate::device::{ArchiveVfsProvider, DeviceVfsEntry};
 use crate::error::AppCoreError;
 
+pub mod adb_socket;
 pub mod error;
 pub mod sync;
 pub mod transport;

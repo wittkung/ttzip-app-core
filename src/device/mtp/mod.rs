@@ -1,7 +1,7 @@
 // Copyright 2026 Witt Kung and TTZip Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 //! USB MTP 1.1 protocol implementation, hardware drivers, and session state machines.
 //!
@@ -31,6 +31,11 @@ pub mod container;
 pub mod driver;
 pub mod directory;
 pub mod error;
+#[cfg_attr(
+    all(target_os = "macos", not(feature = "mas")),
+    expect(unsafe_code, reason = "Darwin libproc FFI for non-destructive ptpcamerad check")
+)]
+pub mod mtp_bulk;
 pub mod session;
 pub mod transfer;
 pub mod types;

@@ -267,65 +267,86 @@ impl From<AdbError> for std::io::Error {
     }
 }
 
-impl From<AdbError> for crate::error::AppCoreError {
-    fn from(err: AdbError) -> Self {
-        let reason = match &err {
-            AdbError::Transport(AdbTransportError::Unauthorized) => {
-                "Unauthorized: ADB device rejected connection (check device for RSA auth prompt)".to_string()
+impl AdbError {
+    fn format_timeout_reason(&self) -> String {
+        match self {
+            Self::Transport(AdbTransportError::Timeout(d)) => {
+                format!("Timeout: ADB operation timed out after {d:?}")
             }
-            _ if err.is_timeout() => match &err {
-                AdbError::Transport(AdbTransportError::Timeout(d)) => {
-                    format!("Timeout: ADB operation timed out after {d:?}")
-                }
-                AdbError::Transport(AdbTransportError::Io(io)) => {
-                    format!("Timeout: ADB transport operation timed out ({io})")
-                }
-                AdbError::Sync(AdbSyncError::Io(io)) => {
-                    format!("Timeout: ADB sync operation timed out ({io})")
-                }
-                AdbError::Io(io) => format!("Timeout: ADB operation timed out ({io})"),
-                _ => "Timeout: ADB operation timed out".to_string(),
-            },
-            _ if err.is_disconnected() => match &err {
-                AdbError::Transport(AdbTransportError::DeviceOffline) => {
-                    "Offline: device is unreachable or disconnected".to_string()
-                }
-                AdbError::Transport(AdbTransportError::Io(io)) => {
-                    format!("Offline: device transport disconnected ({io})")
-                }
-                AdbError::Sync(AdbSyncError::Io(io)) => {
-                    format!("Offline: device sync stream disconnected ({io})")
-                }
-                AdbError::Io(io) => {
-                    format!("Offline: device is unreachable or disconnected ({io})")
-                }
-                _ => "Offline: device is unreachable or disconnected".to_string(),
-            },
-            _ if err.is_io() => match &err {
-                AdbError::Io(io) => format!("ADB socket I/O failure: {io}"),
-                AdbError::Transport(AdbTransportError::Io(io)) => {
-                    format!("ADB transport socket I/O failure: {io}")
-                }
-                AdbError::Sync(AdbSyncError::Io(io)) => {
-                    format!("ADB sync socket/stream I/O failure: {io}")
-                }
-                _ => format!("ADB I/O failure: {err}"),
-            },
-            _ => err.to_string(),
-        };
+            Self::Transport(AdbTransportError::Io(io)) => {
+                format!("Timeout: ADB transport operation timed out ({io})")
+            }
+            Self::Sync(AdbSyncError::Io(io)) => {
+                format!("Timeout: ADB sync operation timed out ({io})")
+            }
+            Self::Io(io) => format!("Timeout: ADB operation timed out ({io})"),
+            _ => "Timeout: ADB operation timed out".to_string(),
+        }
+    }
 
-        let kind = if err.is_unauthorized() {
+    fn format_disconnected_reason(&self) -> String {
+        match self {
+            Self::Transport(AdbTransportError::DeviceOffline) => {
+                "Offline: device is unreachable or disconnected".to_string()
+            }
+            Self::Transport(AdbTransportError::Io(io)) => {
+                format!("Offline: device transport disconnected ({io})")
+            }
+            Self::Sync(AdbSyncError::Io(io)) => {
+                format!("Offline: device sync stream disconnected ({io})")
+            }
+            Self::Io(io) => format!("Offline: device is unreachable or disconnected ({io})"),
+            _ => "Offline: device is unreachable or disconnected".to_string(),
+        }
+    }
+
+    fn format_io_reason(&self) -> String {
+        match self {
+            Self::Io(io) => format!("ADB socket I/O failure: {io}"),
+            Self::Transport(AdbTransportError::Io(io)) => {
+                format!("ADB transport socket I/O failure: {io}")
+            }
+            Self::Sync(AdbSyncError::Io(io)) => {
+                format!("ADB sync socket/stream I/O failure: {io}")
+            }
+            _ => format!("ADB I/O failure: {self}"),
+        }
+    }
+
+    fn app_core_reason(&self) -> String {
+        if self.is_unauthorized() {
+            "Unauthorized: ADB device rejected connection (check device for RSA auth prompt)"
+                .to_string()
+        } else if self.is_timeout() {
+            self.format_timeout_reason()
+        } else if self.is_disconnected() {
+            self.format_disconnected_reason()
+        } else if self.is_io() {
+            self.format_io_reason()
+        } else {
+            self.to_string()
+        }
+    }
+
+    fn app_core_kind(&self) -> crate::error::DeviceErrorKind {
+        if self.is_unauthorized() {
             crate::error::DeviceErrorKind::Unauthorized
-        } else if err.is_disconnected() {
+        } else if self.is_disconnected() {
             crate::error::DeviceErrorKind::Offline
-        } else if err.is_timeout() {
+        } else if self.is_timeout() {
             crate::error::DeviceErrorKind::Timeout
-        } else if err.is_io() {
+        } else if self.is_io() {
             crate::error::DeviceErrorKind::Transport
         } else {
             crate::error::DeviceErrorKind::Other
-        };
+        }
+    }
+}
 
+impl From<AdbError> for crate::error::AppCoreError {
+    fn from(err: AdbError) -> Self {
+        let kind = err.app_core_kind();
+        let reason = err.app_core_reason();
         crate::error::AppCoreError::Adb { kind, reason }
     }
 }

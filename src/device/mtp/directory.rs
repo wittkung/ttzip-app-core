@@ -186,5 +186,4 @@ fn validate_child(info: &MtpObjectInfo, storage: u32, parent: u32) -> Result<(),
 }
 
 #[cfg(test)]
-#[path = "directory_tests.rs"]
 mod tests;

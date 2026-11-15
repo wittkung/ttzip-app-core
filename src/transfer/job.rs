@@ -173,7 +173,10 @@ pub struct TransferProgress {
 
 impl TransferProgress {
     /// Creates a new progress snapshot with full encapsulation.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Constructor mirrors flat transfer progress wire fields"
+    )]
     pub fn new(
         job_id: Uuid,
         source_uri: String,

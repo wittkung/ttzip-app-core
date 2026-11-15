@@ -10,7 +10,10 @@
 //! - Entry points check top-level pointer arguments for null before dereferencing; callers must
 //!   still uphold the alignment, validity, and lifetime invariants documented on each function.
 
-#![allow(non_camel_case_types)]
+#![allow(
+    non_camel_case_types,
+    reason = "C-ABI 2.0 exported symbols match C11 header naming conventions"
+)]
 
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicBool, Ordering};

@@ -21,6 +21,9 @@ pub mod transfer;
 pub mod uniffi_api;
 pub mod workspace;
 
+#[cfg(test)]
+mod uniffi_checksum_gate_tests;
+
 pub use cabi::*;
 
 /// Unified top-level prelude exporting canonical entry points across all app-core subsystems.
