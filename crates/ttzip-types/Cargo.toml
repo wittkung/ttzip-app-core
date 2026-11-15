@@ -14,8 +14,19 @@ documentation.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+warnings = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("gil-refs"))'] }
+
+[lints.clippy]
+missing_safety_doc = "allow"
+not_unsafe_ptr_arg_deref = "allow"
+too_many_arguments = "allow"
+only_used_in_recursion = "allow"
+collapsible_if = "allow"
+collapsible_match = "allow"
+needless_range_loop = "allow"
+should_implement_trait = "allow"
 
 [dependencies]
 bytes = "1.10"

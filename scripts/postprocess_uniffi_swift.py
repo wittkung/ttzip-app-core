@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 """
-Postprocesses UniFFI-generated Swift bindings for ttzip_app_core to enforce:
+Postprocesses AppCore and Reader UniFFI Swift bindings to enforce:
 1. SPDX licensing header.
 2. Swift 6 strict concurrency compliance (@unchecked Sendable conformances).
 3. Leak prevention via defer { buf.deallocate() } in lifting routines.
@@ -59,9 +59,9 @@ extension MtpDownloadOutcome: Sendable {}
 extension MtpUploadOutcome: Sendable {}
 extension MtpConflictPolicy: Sendable {}
 """
-    if "extension AppCoreEngine: @unchecked Sendable" not in content:
+    if "open class AppCoreEngine:" in content and "extension AppCoreEngine: @unchecked Sendable" not in content:
         content += "\nextension AppCoreEngine: @unchecked Sendable {}\n"
-    if "extension MtpConflictPolicy: Sendable" not in content:
+    if "open class AppCoreEngine:" in content and "extension MtpConflictPolicy: Sendable" not in content:
         # Replace existing pure Sendable block if present
         if "// MARK: - Intra-Module Concurrency & Interface Alignments (Auto-Generated Postprocess)" in content:
             idx = content.find("// MARK: - Intra-Module Concurrency & Interface Alignments")

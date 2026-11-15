@@ -1,0 +1,4 @@
+module ttzip_readerFFI {
+    header "ttzip_readerFFI.h"
+    export *
+}

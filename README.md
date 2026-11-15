@@ -25,7 +25,7 @@ Build the Rust static library and package the XCFramework:
 ```
 
 The script writes `Frameworks/TTZipAppCoreVendor.xcframework` and
-`Frameworks/libttzip_desktop.a`. Both are build artifacts and are not tracked.
+`Frameworks/libttzip_desktop.a`. The outbound projection includes the framework.
 
 For a release framework, set `TTZIP_SYS_LIB_DIR` to the staged static
 `libdeflate.a`, `liblz4.a`, and `libzstd.a` archives built for macOS 14.0 or
@@ -40,7 +40,7 @@ cargo test --workspace
 swift test
 ```
 
-`swift test` requires the XCFramework from `scripts/build_rust.sh` to exist first.
+`swift test` uses the XCFrameworks produced by `scripts/build_rust.sh`.
 
 ## UniFFI bindings
 
@@ -51,6 +51,25 @@ and checked in so the package builds without the generator. Regenerate them with
 ```sh
 cargo install uniffi-bindgen --version 0.28.3
 ./scripts/generate_uniffi.sh --debug
+```
+
+## Reader product
+
+A client can depend on the `TTZipReader` product for Reader persistence.
+Clients that import both Swift modules can qualify their Reader types with
+`TTZipReader` or `TTZipAppCore`. Both products read the existing on-disk records.
+Use one library instance for concurrent writes to a directory.
+
+The Rust bridge is in `crates/ttzip-reader/`. The native storage is in
+`crates/ttzip-reader-storage/`. The Swift bindings and C module are in
+`Sources/TTZipReader/` and `Sources/CTTZipReaderBridge/`.
+
+`scripts/build_rust.sh` also writes `Frameworks/TTZipReaderVendor.xcframework`.
+Regenerate the Reader bindings with:
+
+```sh
+cargo build --package ttzip-reader
+./scripts/generate_reader_uniffi.sh "$(command -v uniffi-bindgen)" "$PWD/target/debug/libttzip_reader.dylib"
 ```
 
 ## License

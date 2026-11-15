@@ -13,6 +13,7 @@ fi
 CORE_RUST_DIR="${CORE_DIR:+${CORE_DIR}/rust}"
 FRAMEWORKS_DIR="${APP_CORE_DIR}/Frameworks"
 XCFRAMEWORK_DIR="${FRAMEWORKS_DIR}/TTZipAppCoreVendor.xcframework"
+READER_XCFRAMEWORK_DIR="${FRAMEWORKS_DIR}/TTZipReaderVendor.xcframework"
 CORE_FRAMEWORKS_DIR="${CORE_DIR:+${CORE_DIR}/Frameworks}"
 CORE_XCFRAMEWORK_DIR="${CORE_FRAMEWORKS_DIR:+${CORE_FRAMEWORKS_DIR}/TTZipVendor.xcframework}"
 
@@ -150,7 +151,7 @@ if [ "${FORCE_REBUILD}" -eq 1 ]; then
     if [ -n "${CORE_RUST_DIR}" ] && [ -f "${CORE_RUST_DIR}/Cargo.toml" ]; then
         "${CARGO[@]}" clean --manifest-path "${CORE_RUST_DIR}/Cargo.toml"
     fi
-    rm -rf "${XCFRAMEWORK_DIR}" "${FRAMEWORKS_DIR}/libttzip_desktop.a"
+    rm -rf "${XCFRAMEWORK_DIR}" "${READER_XCFRAMEWORK_DIR}" "${FRAMEWORKS_DIR}/libttzip_desktop.a"
 fi
 
 echo "=========================================="
@@ -182,6 +183,7 @@ unset IFS
 export LIBRARY_PATH="${RESOLVED_LIB_PATH:+${RESOLVED_LIB_PATH}:}${LIBRARY_PATH:-}"
 
 PER_TARGET_MERGED=()
+PER_TARGET_READER=()
 for index in "${!TARGETS[@]}"; do
     target="${TARGETS[index]}"
     release_stage=""
@@ -190,8 +192,9 @@ for index in "${!TARGETS[@]}"; do
         release_stage="${RELEASE_CODEC_STAGES[index]}"
         usb_features=(--features rusb/vendored)
     fi
-    echo "--> [INFO] Compiling ttzip_app_core staticlib for ${target} (${BUILD_MODE})..."
+    echo "--> [INFO] Compiling AppCore and Reader static libraries for ${target} (${BUILD_MODE})..."
     (cd "${APP_CORE_DIR}" && TTZIP_RELEASE_CODEC_STAGE="${release_stage}" "${CARGO[@]}" build \
+        --package ttzip-app-core --package ttzip-reader \
         --target "${target}" \
         ${usb_features[@]+"${usb_features[@]}"} \
         ${CARGO_FLAGS} \
@@ -202,6 +205,13 @@ for index in "${!TARGETS[@]}"; do
         echo "❌ Error: Expected static library not found at ${APP_TARGET_LIB}"
         exit 1
     fi
+
+    READER_TARGET_LIB="${EFFECTIVE_APP_TARGET_DIR}/${target}/${BUILD_MODE}/libttzip_reader.a"
+    if [ ! -f "${READER_TARGET_LIB}" ]; then
+        echo "Error: Expected Reader static library not found at ${READER_TARGET_LIB}" >&2
+        exit 1
+    fi
+    PER_TARGET_READER+=("${READER_TARGET_LIB}")
 
     TARGET_PARTS=("${APP_TARGET_LIB}")
 
@@ -425,3 +435,20 @@ else
     echo "❌ Error: Failed to generate ${XCFRAMEWORK_DIR}"
     exit 1
 fi
+
+READER_STAGE="$(mktemp -d)"
+trap 'rm -rf "${READER_STAGE}"' EXIT
+READER_STATIC_LIB="${READER_STAGE}/libTTZipReaderVendor.a"
+if [ ${#PER_TARGET_READER[@]} -gt 1 ]; then
+    lipo -create "${PER_TARGET_READER[@]}" -output "${READER_STATIC_LIB}"
+else
+    cp -f "${PER_TARGET_READER[0]}" "${READER_STATIC_LIB}"
+fi
+strip_embedded_bitcode "${READER_STATIC_LIB}"
+deduplicate_archive "${READER_STATIC_LIB}"
+
+xcodebuild -create-xcframework \
+    -library "${READER_STATIC_LIB}" \
+    -output "${READER_STAGE}/TTZipReaderVendor.xcframework"
+rm -rf "${READER_XCFRAMEWORK_DIR}"
+mv "${READER_STAGE}/TTZipReaderVendor.xcframework" "${READER_XCFRAMEWORK_DIR}"

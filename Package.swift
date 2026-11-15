@@ -23,6 +23,11 @@ let package = Package(
         .library(
             name: "CTTZipAppCoreBridge",
             targets: ["CTTZipAppCoreBridge"]
+        ),
+        .library(
+            name: "TTZipReader",
+            type: .dynamic,
+            targets: ["TTZipReader"]
         )
     ],
     dependencies: [],
@@ -61,12 +66,31 @@ let package = Package(
             path: "Sources/TTZipAppCore",
             swiftSettings: coreSwiftSettings
         ),
+        .binaryTarget(
+            name: "TTZipReaderVendor",
+            path: "Frameworks/TTZipReaderVendor.xcframework"
+        ),
+        .target(
+            name: "CTTZipReaderBridge",
+            dependencies: ["TTZipReaderVendor"],
+            publicHeadersPath: "include"
+        ),
+        .target(
+            name: "TTZipReader",
+            dependencies: ["CTTZipReaderBridge"],
+            swiftSettings: coreSwiftSettings
+        ),
         .testTarget(
             name: "TTZipAppCoreTests",
             dependencies: [
                 "TTZipAppCore"
             ],
             path: "Tests/TTZipAppCoreTests",
+            swiftSettings: coreSwiftSettings
+        ),
+        .testTarget(
+            name: "TTZipReaderInteropTests",
+            dependencies: ["TTZipAppCore", "TTZipReader"],
             swiftSettings: coreSwiftSettings
         )
     ],

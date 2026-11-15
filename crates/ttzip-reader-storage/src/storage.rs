@@ -1,14 +1,14 @@
 // Copyright 2026 Witt Kung and TTZip Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use super::{models::validate_document, ReaderDocument, ReaderError, ReaderLibrary};
+use super::{models::validate_document, ReaderDocument, ReaderError, ReaderStore};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 
 const MAX_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
 use std::path::PathBuf;
 
-impl ReaderLibrary {
+impl ReaderStore {
     pub(super) fn document_path(&self, identity: &str) -> Result<PathBuf, ReaderError> {
         if identity.trim().is_empty() || identity.len() > 16 * 1024 {
             return Err(ReaderError::invalid("Invalid document identity"));

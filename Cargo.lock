@@ -951,10 +951,35 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "ttzip-reader-storage",
  "ttzip-types",
  "uniffi",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "ttzip-reader"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ttzip-reader-storage",
+ "uniffi",
+]
+
+[[package]]
+name = "ttzip-reader-storage"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]

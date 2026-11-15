@@ -1,0 +1,22 @@
+[package]
+name = "ttzip-reader"
+version = "0.1.0"
+edition = "2021"
+authors = ["MetastudyLine Team"]
+license = "MIT OR Apache-2.0"
+description = "TTZip Reader UniFFI library"
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+ttzip-reader-storage = { path = "../ttzip-reader-storage" }
+uniffi = "0.28.3"
+
+[dev-dependencies]
+tempfile = "3.12"
+
+[lints]
+workspace = true
